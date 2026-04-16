@@ -4,77 +4,57 @@ import google.generativeai as genai
 from flask import Flask
 from threading import Thread
 
-# 1. Инициализация (Бот + ИИ)
+# 1. Настройки
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 
 genai.configure(api_key=GEMINI_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash') # Самый быстрый для закупок
+model = genai.GenerativeModel('gemini-1.5-flash')
 bot = telebot.TeleBot(TOKEN)
 
-# Хранилище состояний (в рамках одной сессии)
+# Хранилище (InMemory)
 user_states = {}
 
-# 2. Фейковый сервер для Render
+# 2. Мини-сервер для Render
 app = Flask('')
 @app.route('/')
-def home(): return "Закупщик активен!"
+def home(): return "Закупщик в эфире!"
 
 def run():
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
-# 3. ЛОГИКА БОТА
-
-@bot.message_handler(commands=['start', 'help'])
-@bot.message_handler(func=lambda m: m.text.lower() == 'привет')
-def start_cmd(message):
+# 3. Обработка команд
+@bot.message_handler(commands=['start'])
+def welcome(message):
     user_states[message.chat.id] = {'step': 'city'}
-    bot.send_message(message.chat.id, "Привет, Григорий! Я твой Закупщик. Напиши, в каком ты городе?")
+    bot.send_message(message.chat.id, "Привет! Я твой Закупщик. Напиши, в каком ты городе?")
 
 @bot.message_handler(func=lambda m: user_states.get(m.chat.id, {}).get('step') == 'city')
 def handle_city(message):
-    city = message.text
-    user_states[message.chat.id] = {'step': 'list', 'city': city}
-    bot.send_message(message.chat.id, f"Принято: {city}. Теперь пришли список товаров (можно просто текстом).")
+    user_states[message.chat.id] = {'step': 'list', 'city': message.text}
+    bot.send_message(message.chat.id, f"Принято: {message.text}. Теперь пришли список товаров.")
 
 @bot.message_handler(func=lambda m: user_states.get(m.chat.id, {}).get('step') == 'list')
 def handle_list(message):
     city = user_states[message.chat.id]['city']
     goods = message.text
-    bot.send_message(message.chat.id, "⏳ Понял. Начинаю поиск лучших цен в сетевых магазинах... Это займет секунд 10-15.")
+    bot.send_message(message.chat.id, "⏳ Секунду, ищу лучшие цены в сетевых магазинах...")
 
-    # ТОТ САМЫЙ ПРОМПТ ИЗ ТВОЕГО ТЗ
-    full_prompt = f"""
-    Ты — профессиональный ИИ-закупщик. Твоя задача — проанализировать цены в городе {city}.
-    Список товаров: {goods}
-    
-    ИНСТРУКЦИЯ:
-    1. Найди цены на эти товары во всех сетевых магазинах города (АТБ, Сильпо, Варус и т.д.).
-    2. Оцени наличие, скидки и реальную цену на сегодня (16 апреля 2026 года).
-    3. Выбери ОДИН магазин, где вся корзина выйдет ДЕШЕВЛЕ всего.
-    4. Рассчитай примерную экономию по сравнению с другими сетями.
-    5. Если указана марка — ищи только её. Если нет — бери самый дешевый аналог.
-    
-    РЕЗУЛЬТАТ ВЫДАЙ СТРОГО В ФОРМАТЕ:
-    Название магазина – 
-    Стоимость закупки – 
-    Экономия – 
-    
-    В конце добавь короткое пояснение, почему выбран этот магазин.
-    """
+    # Промпт (твой ТЗ)
+    prompt = f"Ты эксперт по ценам в Украине. Город: {city}. Список покупок: {goods}. Найди самые дешевые варианты в сетевых магазинах (АТБ, Сильпо, Варус и др.) на сегодня 16 апреля 2026 года. Выдай: 1. Магазин-победитель. 2. Общая стоимость. 3. Экономия. Обоснуй коротко."
 
     try:
-        response = model.generate_content(full_prompt)
+        response = model.generate_content(prompt)
         bot.send_message(message.chat.id, response.text)
     except Exception as e:
-        bot.send_message(message.chat.id, "Упс, поиск сорвался. Попробуй еще раз.")
-        print(f"Ошибка Gemini: {e}")
-
-    # Сброс состояния
+        bot.send_message(message.chat.id, f"Ошибка: {str(e)}")
+    
+    # Сброс
     user_states[message.chat.id] = {}
 
 if __name__ == "__main__":
-    Thread(target=run).start()
-    print("Бот запущен...")
-    bot.infinity_polling()
+    Thread(target=run, daemon=True).start()
+    print("Закупщик запущен!")
+    # infinity_polling с параметрами против конфликтов
+    bot.infinity_polling(timeout=10, long_polling_timeout=5)
