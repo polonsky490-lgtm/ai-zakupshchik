@@ -14,7 +14,7 @@ genai.configure(api_key=GEMINI_KEY)
 # Пытаемся подключить модель 'gemini-pro' - она самая стабильная
 # и гарантированно есть во всех версиях библиотеки
 try:
-    model = genai.GenerativeModel('gemini-pro')
+    model = genai.GenerativeModel('gemini-1.5-flash-latest')
 except Exception as e:
     print(f"Критическая ошибка модели: {e}")
 
