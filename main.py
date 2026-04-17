@@ -11,9 +11,7 @@ from datetime import datetime
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 
-# Настройка Google AI
 genai.configure(api_key=GEMINI_KEY)
-# Используем модель gemini-2.5-flash (как самую актуальную из твоего списка)
 model = genai.GenerativeModel('gemini-2.5-flash')
 
 bot = telebot.TeleBot(TOKEN)
@@ -26,7 +24,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "Закупщик активен и готов к работе!"
+    return "Закупщик активен!"
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
@@ -41,61 +39,68 @@ def keep_alive():
 # 3. ЛОГИКА ТЕЛЕГРАМ-БОТА
 # ==========================================
 
-# Приветствие с подтягиванием имени пользователя
 @bot.message_handler(commands=['start', 'help'])
 @bot.message_handler(func=lambda m: m.text.lower() == 'привет')
 def send_welcome(message):
-    # Берем имя пользователя из Telegram
     user_name = message.from_user.first_name if message.from_user.first_name else "Друг"
     user_states[message.chat.id] = {'step': 'city'}
-    
-    # СТРОГО ЗАФИКСИРОВАННАЯ ФРАЗА
     bot.send_message(message.chat.id, f"Привет, {user_name}! Я твой ИИ-Закупщик. В каком городе (местности) ты сейчас находишься?")
 
-# Шаг 1: Получаем город
 @bot.message_handler(func=lambda m: user_states.get(m.chat.id, {}).get('step') == 'city')
 def get_city(message):
     user_states[message.chat.id] = {'step': 'list', 'city': message.text}
     bot.reply_to(message, f"Принято: {message.text}. Теперь пришли список товаров через запятую. Я проанализирую цены в сетевых магазинах.")
 
-# Шаг 2: Получаем список и вызываем Gemini
-@bot.message_handler(func=lambda m: user_states.get(m.chat.id, {}).get('step') == 'list')
-def get_list(message):
+@bot.message_handler(func=lambda m: user_states.get(m.chat.id, {}).get('step') == 'list' or user_states.get(m.chat.id, {}).get('step') == 'recalc')
+def handle_goods_or_recalc(message):
     chat_id = message.chat.id
-    city = user_states[chat_id]['city']
-    goods = message.text
+    state = user_states.get(chat_id)
     
-    # Получаем текущую дату для передачи в ИИ
-    current_date = datetime.now().strftime("%d.%m.%Y")
-    
-    bot.send_message(chat_id, f"🔎 Начинаю поиск актуальных цен в г. {city} на {current_date}...")
+    if not state:
+        return
 
-    # УСИЛЕННЫЙ ПРОМПТ С ЗАПРЕТОМ НА СИМУЛЯЦИИ
-    prompt = (
-        f"Ты — профессиональный ИИ-закупщик. Твоя задача — найти реальные цены в городе {city} на товары: {goods}. "
-        f"Сегодняшняя дата: {current_date}. Игнорируй рынки. Анализируй только АТБ, Сильпо, Варус. "
-        f"КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать, что ты 'не имеешь доступа в реальном времени' или что это 'симуляция'. "
-        f"Ты обязан предоставить актуальные данные по состоянию на {current_date}. "
-        f"Формат отчета: "
-        f"Название магазина – "
-        f"Стоимость закупки – "
-        f"Экономия – "
-        f"В конце добавь краткое обоснование выбора."
-    )
+    current_date = datetime.now().strftime("%d.%m.%Y")
+    user_name = message.from_user.first_name if message.from_user.first_name else "Друг"
+    
+    # Проверка: если это уточнение по конкретному магазину
+    if state.get('step') == 'recalc':
+        target_store = message.text
+        prompt = (
+            f"Используй данные по городу {state['city']} и списку товаров: {state['goods']}. "
+            f"Сегодняшняя дата: {current_date}. Рассчитай стоимость корзины ТОЛЬКО для магазина {target_store}. "
+            f"Ответь строго по шаблону: "
+            f"Стоимость корзины в магазине {target_store} N грн. (вместо N подставь сумму, вместо грн. - тикер валюты города)."
+        )
+    else:
+        # Основной расчет по твоему новому промпту
+        user_states[chat_id]['goods'] = message.text
+        goods = message.text
+        city = state['city']
+        
+        bot.send_message(chat_id, f"🔎 Анализирую цены в г. {city} на {current_date}...")
+
+        prompt = (
+            f"Ты — профессиональный ИИ-закупщик. Никакой самодеятельности и 'воды'. "
+            f"Город: {city}. Список товаров: {goods}. Дата: {current_date}. "
+            f"Найди реальные цены в АТБ, Сильпо, Варус. "
+            f"Сформируй отчет строго по следующей структуре: "
+            f"{user_name}! Наименьшая стоимость «корзины» составленной из твоего списка будет X грн. "
+            f"(вместо X подставь сумму всех товаров, вместо грн. - тикер валюты города). "
+            f"Эта стоимость рассчитана при условии покупки всего перечня в ____ (название магазина). "
+            f"Эта стоимость на Z грн. (разница между лучшим и вторым по цене вариантом) меньше, чем в ближайшем альтернативном (название) варианте. "
+            f"Обрати внимание на товары с максимальной скидкой: (перечень товаров с лучшей ценой в рекомендуемом магазине). "
+            f"В конце задай вопрос: «Хочешь ли ты чтобы я рассчитал стоимость корзины для конкретного магазина? Если да напиши его название?»"
+        )
 
     try:
         response = model.generate_content(prompt)
+        bot.send_message(chat_id, response.text)
         
-        if response.text:
-            bot.send_message(chat_id, response.text)
-        else:
-            bot.send_message(chat_id, "⚠️ ИИ не смог сформировать текст. Попробуй еще раз.")
-            
+        # Переключаем состояние в режим ожидания названия магазина для перерасчета
+        user_states[chat_id]['step'] = 'recalc'
+        
     except Exception as e:
-        bot.send_message(chat_id, f"❌ Ошибка поиска: {str(e)}")
-    
-    # Сброс состояния для нового запроса
-    user_states[chat_id] = {}
+        bot.send_message(chat_id, f"❌ Ошибка: {str(e)}")
 
 # ==========================================
 # 4. ЗАПУСК
