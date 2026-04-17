@@ -9,63 +9,55 @@ TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 
 genai.configure(api_key=GEMINI_KEY)
-# Используем самую актуальную модель
-model = genai.GenerativeModel('gemini-1.5-flash')
+
+# ПРОБУЕМ САМУЮ СТАБИЛЬНУЮ МОДЕЛЬ
+model = genai.GenerativeModel('gemini-pro')
 
 bot = telebot.TeleBot(TOKEN)
 user_states = {}
 
-# 2. Flask сервер
 app = Flask('')
 @app.route('/')
-def home(): return "Закупщик активен!"
+def home(): return "Закупщик в строю!"
 
 def run():
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
-# 3. Логика бота
-@bot.message_handler(commands=['start', 'help'])
-def send_welcome(message):
+@bot.message_handler(commands=['start'])
+def welcome(message):
     user_states[message.chat.id] = {'step': 'city'}
-    bot.reply_to(message, "Привет! Я готов. В каком ты городе?")
+    bot.send_message(message.chat.id, "Привет! В каком ты городе?")
 
 @bot.message_handler(func=lambda m: user_states.get(m.chat.id, {}).get('step') == 'city')
-def get_city(message):
+def handle_city(message):
     user_states[message.chat.id] = {'step': 'list', 'city': message.text}
-    bot.reply_to(message, f"Город {message.text} принят. Что покупаем?")
+    bot.send_message(message.chat.id, f"Принято: {message.text}. Что ищем?")
 
 @bot.message_handler(func=lambda m: user_states.get(m.chat.id, {}).get('step') == 'list')
-def get_list(message):
-    chat_id = message.chat.id
-    city = user_states[chat_id]['city']
-    goods = message.text
+def handle_list(message):
+    state = user_states.get(message.chat.id)
+    if not state: return
     
-    bot.send_message(chat_id, f"🔎 Ищу товары в г. {city}...")
+    city = state['city']
+    goods = message.text
+    bot.send_message(message.chat.id, "🔎 Связываюсь с ИИ для анализа цен в Днепре...")
 
-    # Детальный промпт по твоему ТЗ
-    prompt = (
-        f"Ты — профессиональный закупщик. Город: {city}. Список: {goods}. "
-        f"Найди актуальные цены в сетях АТБ, Сильпо, Варус на 17 апреля 2026 года. "
-        f"Выдай: 1. Магазин с самой дешевой корзиной. 2. Итоговую сумму. 3. Экономию."
-    )
+    prompt = f"Ты эксперт по ценам в {city}. Список товаров: {goods}. Найди самые дешевые варианты в сетевых магазинах (АТБ, Варус, Сильпо). Напиши: какой магазин самый дешевый для всей корзины, общую сумму и сколько сэкономим."
 
     try:
-        # Пытаемся получить ответ
+        # Генерируем контент
         response = model.generate_content(prompt)
-        
-        if response and response.text:
-            bot.send_message(chat_id, response.text)
-        else:
-            # Если ИИ заблокировал ответ по соображениям безопасности
-            bot.send_message(chat_id, "⚠️ ИИ вернул пустой ответ или заблокировал запрос.")
-            
+        bot.send_message(message.chat.id, response.text)
     except Exception as e:
-        # Выводим конкретную техническую ошибку прямо в чат
-        bot.send_message(chat_id, f"❌ Ошибка при вызове ИИ: {str(e)}")
+        # Если снова 404, выведем список ВСЕХ моделей, которые видит твой бот
+        try:
+            available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+            bot.send_message(message.chat.id, f"Ошибка. Доступные модели: {', '.join(available_models)}")
+        except:
+            bot.send_message(message.chat.id, f"❌ Критическая ошибка: {str(e)}")
     
-    # Сброс состояния
-    user_states[chat_id] = {}
+    user_states[message.chat.id] = {}
 
 if __name__ == "__main__":
     Thread(target=run, daemon=True).start()
