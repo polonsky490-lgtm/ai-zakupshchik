@@ -8,23 +8,17 @@ from threading import Thread
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 
-# Настройка Google AI
 genai.configure(api_key=GEMINI_KEY)
-
-# Пытаемся подключить модель 'gemini-pro' - она самая стабильная
-# и гарантированно есть во всех версиях библиотеки
-try:
-    model = genai.GenerativeModel('gemini-1.5-flash-latest')
-except Exception as e:
-    print(f"Критическая ошибка модели: {e}")
+# Используем самую актуальную модель
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 bot = telebot.TeleBot(TOKEN)
 user_states = {}
 
-# 2. Flask сервер (для Render)
+# 2. Flask сервер
 app = Flask('')
 @app.route('/')
-def home(): return "Бот Закупщик в сети!"
+def home(): return "Закупщик активен!"
 
 def run():
     port = int(os.environ.get("PORT", 8080))
@@ -34,12 +28,12 @@ def run():
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     user_states[message.chat.id] = {'step': 'city'}
-    bot.reply_to(message, "Привет, Григорий! Я твой Закупщик. Напиши, в каком ты городе?")
+    bot.reply_to(message, "Привет! Я готов. В каком ты городе?")
 
 @bot.message_handler(func=lambda m: user_states.get(m.chat.id, {}).get('step') == 'city')
 def get_city(message):
     user_states[message.chat.id] = {'step': 'list', 'city': message.text}
-    bot.reply_to(message, f"Город {message.text} принят. Теперь пришли список продуктов через запятую.")
+    bot.reply_to(message, f"Город {message.text} принят. Что покупаем?")
 
 @bot.message_handler(func=lambda m: user_states.get(m.chat.id, {}).get('step') == 'list')
 def get_list(message):
@@ -47,26 +41,32 @@ def get_list(message):
     city = user_states[chat_id]['city']
     goods = message.text
     
-    bot.send_message(chat_id, "⏳ Ищу лучшие цены в сетевых магазинах Днепра...")
+    bot.send_message(chat_id, f"🔎 Ищу товары в г. {city}...")
 
-    # Твой промпт (упростил для надежности)
-    prompt = f"Ты помощник по покупкам. Город: {city}. Список товаров: {goods}. Найди актуальные цены в супермаркетах АТБ, Варус, Сильпо на сегодня (16 апреля 2026). Напиши: какой магазин самый дешевый для всей корзины, общую сумму и сколько сэкономим."
+    # Детальный промпт по твоему ТЗ
+    prompt = (
+        f"Ты — профессиональный закупщик. Город: {city}. Список: {goods}. "
+        f"Найди актуальные цены в сетях АТБ, Сильпо, Варус на 17 апреля 2026 года. "
+        f"Выдай: 1. Магазин с самой дешевой корзиной. 2. Итоговую сумму. 3. Экономию."
+    )
 
     try:
-        # Генерируем ответ
+        # Пытаемся получить ответ
         response = model.generate_content(prompt)
-        if response.text:
+        
+        if response and response.text:
             bot.send_message(chat_id, response.text)
         else:
-            bot.send_message(chat_id, "ИИ вернул пустой ответ. Попробуй еще раз.")
+            # Если ИИ заблокировал ответ по соображениям безопасности
+            bot.send_message(chat_id, "⚠️ ИИ вернул пустой ответ или заблокировал запрос.")
+            
     except Exception as e:
-        # Выводим ошибку, чтобы понять, в чем дело
-        bot.send_message(chat_id, f"Ошибка ИИ: {str(e)}")
+        # Выводим конкретную техническую ошибку прямо в чат
+        bot.send_message(chat_id, f"❌ Ошибка при вызове ИИ: {str(e)}")
     
-    # Сброс состояния для нового круга
+    # Сброс состояния
     user_states[chat_id] = {}
 
 if __name__ == "__main__":
     Thread(target=run, daemon=True).start()
-    print("Запуск бота...")
     bot.infinity_polling(skip_pending=True)
