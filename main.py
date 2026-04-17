@@ -11,7 +11,7 @@ GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 genai.configure(api_key=GEMINI_KEY)
 
 # ПРОБУЕМ САМУЮ СТАБИЛЬНУЮ МОДЕЛЬ
-model = genai.GenerativeModel('gemini-pro')
+model = genai.GenerativeModel('gemini-2.5-flash')
 
 bot = telebot.TeleBot(TOKEN)
 user_states = {}
@@ -46,16 +46,16 @@ def handle_list(message):
     prompt = f"Ты эксперт по ценам в {city}. Список товаров: {goods}. Найди самые дешевые варианты в сетевых магазинах (АТБ, Варус, Сильпо). Напиши: какой магазин самый дешевый для всей корзины, общую сумму и сколько сэкономим."
 
     try:
-        # Генерируем контент
+        # Генерируем ответ через самую новую модель
         response = model.generate_content(prompt)
-        bot.send_message(message.chat.id, response.text)
+        
+        if response.text:
+            bot.send_message(chat_id, response.text)
+        else:
+            bot.send_message(chat_id, "ИИ не смог сформировать текст ответа.")
+            
     except Exception as e:
-        # Если снова 404, выведем список ВСЕХ моделей, которые видит твой бот
-        try:
-            available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-            bot.send_message(message.chat.id, f"Ошибка. Доступные модели: {', '.join(available_models)}")
-        except:
-            bot.send_message(message.chat.id, f"❌ Критическая ошибка: {str(e)}")
+        bot.send_message(chat_id, f"Ошибка: {str(e)}")
     
     user_states[message.chat.id] = {}
 
