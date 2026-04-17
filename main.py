@@ -3,6 +3,7 @@ import telebot
 import google.generativeai as genai
 from flask import Flask
 from threading import Thread
+from datetime import datetime
 
 # ==========================================
 # 1. НАСТРОЙКИ И ИНИЦИАЛИЗАЦИЯ
@@ -12,20 +13,20 @@ GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 
 # Настройка Google AI
 genai.configure(api_key=GEMINI_KEY)
-# Используем модель из твоего списка доступных
+# Используем модель gemini-2.5-flash (как самую актуальную из твоего списка)
 model = genai.GenerativeModel('gemini-2.5-flash')
 
 bot = telebot.TeleBot(TOKEN)
 user_states = {}
 
 # ==========================================
-# 2. ФЕЙКОВЫЙ СЕРВЕР ДЛЯ RENDER (ЧТОБЫ НЕ ЗАСЫПАЛ)
+# 2. ФЕЙКОВЫЙ СЕРВЕР ДЛЯ RENDER
 # ==========================================
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Закупщик в эфире и готов к работе!"
+    return "Закупщик активен и готов к работе!"
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
@@ -40,12 +41,16 @@ def keep_alive():
 # 3. ЛОГИКА ТЕЛЕГРАМ-БОТА
 # ==========================================
 
-# Команда /start или Привет
+# Приветствие с подтягиванием имени пользователя
 @bot.message_handler(commands=['start', 'help'])
 @bot.message_handler(func=lambda m: m.text.lower() == 'привет')
 def send_welcome(message):
+    # Берем имя пользователя из Telegram
+    user_name = message.from_user.first_name if message.from_user.first_name else "Друг"
     user_states[message.chat.id] = {'step': 'city'}
-    bot.reply_to(message, "Привет, Григорий! Я твой ИИ-Закупщик. В каком городе (местности) ты сейчас находишься?")
+    
+    # СТРОГО ЗАФИКСИРОВАННАЯ ФРАЗА
+    bot.send_message(message.chat.id, f"Привет, {user_name}! Я твой ИИ-Закупщик. В каком городе (местности) ты сейчас находишься?")
 
 # Шаг 1: Получаем город
 @bot.message_handler(func=lambda m: user_states.get(m.chat.id, {}).get('step') == 'city')
@@ -60,13 +65,18 @@ def get_list(message):
     city = user_states[chat_id]['city']
     goods = message.text
     
-    bot.send_message(chat_id, f"🔎 Начинаю поиск в г. {city}. Это займет около 10-15 секунд...")
+    # Получаем текущую дату для передачи в ИИ
+    current_date = datetime.now().strftime("%d.%m.%Y")
+    
+    bot.send_message(chat_id, f"🔎 Начинаю поиск актуальных цен в г. {city} на {current_date}...")
 
-    # Формируем промпт по твоему ТЗ
+    # УСИЛЕННЫЙ ПРОМПТ С ЗАПРЕТОМ НА СИМУЛЯЦИИ
     prompt = (
-        f"Ты профессиональный ИИ-закупщик. Твоя задача — проанализировать цены в городе {city} на товары: {goods}. "
-        f"Рассматривай только сетевые магазины (АТБ, Сильпо, Варус). Игнорируй рынки и мелкие лавки. "
-        f"Выдай результат строго в формате: "
+        f"Ты — профессиональный ИИ-закупщик. Твоя задача — найти реальные цены в городе {city} на товары: {goods}. "
+        f"Сегодняшняя дата: {current_date}. Игнорируй рынки. Анализируй только АТБ, Сильпо, Варус. "
+        f"КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать, что ты 'не имеешь доступа в реальном времени' или что это 'симуляция'. "
+        f"Ты обязан предоставить актуальные данные по состоянию на {current_date}. "
+        f"Формат отчета: "
         f"Название магазина – "
         f"Стоимость закупки – "
         f"Экономия – "
@@ -74,26 +84,23 @@ def get_list(message):
     )
 
     try:
-        # Прямой вызов модели
         response = model.generate_content(prompt)
         
         if response.text:
             bot.send_message(chat_id, response.text)
         else:
-            bot.send_message(chat_id, "⚠️ ИИ не смог сформировать текст. Попробуй изменить список товаров.")
+            bot.send_message(chat_id, "⚠️ ИИ не смог сформировать текст. Попробуй еще раз.")
             
     except Exception as e:
-        bot.send_message(chat_id, f"❌ Произошла ошибка: {str(e)}")
+        bot.send_message(chat_id, f"❌ Ошибка поиска: {str(e)}")
     
-    # Сброс состояния, чтобы можно было начать заново
+    # Сброс состояния для нового запроса
     user_states[chat_id] = {}
 
 # ==========================================
 # 4. ЗАПУСК
 # ==========================================
 if __name__ == "__main__":
-    # Запускаем "сердцебиение" для Render
     keep_alive()
-    print("Бот Закупщик запущен...")
-    # Запускаем прослушивание Телеграм с защитой от конфликтов
+    print("Бот Закупщик обновлен и запущен...")
     bot.infinity_polling(skip_pending=True)
