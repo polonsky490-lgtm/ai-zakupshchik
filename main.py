@@ -17,7 +17,7 @@ user_states = {}
 
 app = Flask('')
 @app.route('/')
-def home(): return "Закупщик в режиме отладки!"
+def home(): return "Закупщик: Автопилот включен"
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
@@ -56,7 +56,7 @@ def handle_request(message):
         prompt = f"Цена на {yesterday} для {state['city']} в магазине {target_store} для {state['goods']}. Ответь строго: Стоимость корзины в {target_store} N грн."
     else:
         user_states[chat_id]['goods'] = message.text
-        bot.send_message(chat_id, f"🔎 Проверяю базу данных по г. {state['city']}...")
+        bot.send_message(chat_id, f"🔎 Опрашиваю нейросети для г. {state['city']}...")
         prompt = (
             f"ИНСТРУКЦИЯ: Ты ИИ-закупщик. Текущая дата — {yesterday}. "
             f"Город: {state['city']}. Список товаров: {message.text}. "
@@ -67,28 +67,31 @@ def handle_request(message):
             f"Нужен расчет для конкретного магазина?"
         )
 
-    last_error = ""
     final_response = None
+    last_error = "Не удалось найти работающую модель."
 
-    # Пробуем только ОДНУ самую стабильную модель, но по разным ключам
+    # ПЕРЕБОР КЛЮЧЕЙ
     for api_key in KEYS:
         if final_response: break
         try:
             genai.configure(api_key=api_key)
-            # Отключаем фильтры безопасности, чтобы они не блокировали поиск цен
-            safety_settings = [
-                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-            ]
-            model = genai.GenerativeModel('gemini-1.5-flash', safety_settings=safety_settings)
+            
+            # АВТОПОДБОР ЖИВОЙ МОДЕЛИ
+            models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+            if not models:
+                continue
+            
+            # Берем первую доступную модель (обычно это flash или pro)
+            # Мы ищем модель, которая не требует v1beta, если v1beta падает
+            target_model = models[0] 
+            
+            model = genai.GenerativeModel(target_model)
             response = model.generate_content(prompt)
             
             if response and response.text:
                 final_response = response.text.strip()
             else:
-                last_error = "ИИ вернул пустой ответ (возможно, сработал внутренний фильтр)."
+                last_error = "ИИ вернул пустой ответ."
         except Exception as e:
             last_error = str(e)
             continue
@@ -97,7 +100,6 @@ def handle_request(message):
         bot.send_message(chat_id, final_response)
         user_states[chat_id]['step'] = 'recalc'
     else:
-        # Выводим реальную причину ошибки Григорию
         bot.send_message(chat_id, f"❌ Техническая ошибка: {last_error}")
 
 if __name__ == "__main__":
