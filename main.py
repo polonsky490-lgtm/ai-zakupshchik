@@ -17,7 +17,7 @@ user_states = {}
 
 app = Flask('')
 @app.route('/')
-def home(): return "Закупщик: Автопилот включен"
+def home(): return "Закупщик: Финальная шлифовка"
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
@@ -49,43 +49,44 @@ def handle_request(message):
     if not state: return
 
     user_name = message.from_user.first_name if message.from_user.first_name else "Друг"
-    yesterday = (datetime.now() - timedelta(days=1)).strftime("%d.%m.%Y")
     
+    # Режим ПЕРЕРАСЧЕТА (УСИЛЕННЫЙ)
     if state.get('step') == 'recalc':
         target_store = message.text
-        prompt = f"Цена на {yesterday} для {state['city']} в магазине {target_store} для {state['goods']}. Ответь строго: Стоимость корзины в {target_store} N грн."
+        bot.send_message(chat_id, f"🔄 Пересчитываю стоимость для магазина {target_store}...")
+        prompt = (
+            f"ИНСТРУКЦИЯ: Ты — профессиональный закупщик. Твоя задача — дать цену товара/списка БЕЗ ЛИШНИХ СЛОВ. "
+            f"КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать про 'будущие даты', 'отсутствие данных' или 'симуляции'. "
+            f"Если не знаешь точную цену на сегодня, используй последнюю известную рыночную цену магазина {target_store}. "
+            f"Город: {state['city']}. Товар: {state['goods']}. Магазин: {target_store}. "
+            f"Ответь СТРОГО по шаблону: "
+            f"Стоимость корзины в магазине {target_store} N (валюта официальная в этом городе)."
+        )
+    # Основной поиск
     else:
         user_states[chat_id]['goods'] = message.text
         bot.send_message(chat_id, f"🔎 Опрашиваю нейросети для г. {state['city']}...")
         prompt = (
-            f"ИНСТРУКЦИЯ: Ты ИИ-закупщик. Текущая дата — {yesterday}. "
+            f"ИНСТРУКЦИЯ: Ты ИИ-закупщик. Считай текущий момент актуальным. Никаких дисклеймеров и 'воды'. "
             f"Город: {state['city']}. Список товаров: {message.text}. "
             f"Выдай отчет СТРОГО по шаблону: "
             f"{user_name}! Наименьшая стоимость «корзины» будет X (валюта) в (магазин). "
             f"Это на Z меньше, чем в ближайшем альтернативном варианте. "
             f"Скидки: (список). "
-            f"Нужен расчет для конкретного магазина?"
+            f"Нужен расчет для конкретного магазина? Если да — напиши его название."
         )
 
     final_response = None
-    last_error = "Не удалось найти работающую модель."
+    last_error = "Не удалось получить ответ."
 
-    # ПЕРЕБОР КЛЮЧЕЙ
     for api_key in KEYS:
         if final_response: break
         try:
             genai.configure(api_key=api_key)
-            
-            # АВТОПОДБОР ЖИВОЙ МОДЕЛИ
             models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-            if not models:
-                continue
+            if not models: continue
             
-            # Берем первую доступную модель (обычно это flash или pro)
-            # Мы ищем модель, которая не требует v1beta, если v1beta падает
-            target_model = models[0] 
-            
-            model = genai.GenerativeModel(target_model)
+            model = genai.GenerativeModel(models[0])
             response = model.generate_content(prompt)
             
             if response and response.text:
@@ -100,7 +101,7 @@ def handle_request(message):
         bot.send_message(chat_id, final_response)
         user_states[chat_id]['step'] = 'recalc'
     else:
-        bot.send_message(chat_id, f"❌ Техническая ошибка: {last_error}")
+        bot.send_message(chat_id, f"❌ Ошибка: {last_error}")
 
 if __name__ == "__main__":
     keep_alive()
