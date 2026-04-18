@@ -6,26 +6,22 @@ from threading import Thread
 from datetime import datetime, timedelta
 
 # ==========================================
-# 1. НАСТРОЙКИ
+# 1. НАСТРОЙКИ (ПОДДЕРЖКА ДВУХ КЛЮЧЕЙ)
 # ==========================================
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+# Берем два ключа из переменных окружения
+KEYS = [os.getenv("GEMINI_API_KEY"), os.getenv("GEMINI_API_KEY_2")]
+# Оставляем только те ключи, которые реально добавлены
+KEYS = [k for k in KEYS if k]
 
-genai.configure(api_key=GEMINI_KEY)
-
-# МЕНЯЕМ ПРИОРИТЕТЫ: 1.5 Flash самая выносливая по лимитам
-MODELS_PRIORITY = [
-    'gemini-1.5-flash', 
-    'gemini-1.5-pro',
-    'gemini-2.0-flash-exp' # Оставляем как резерв
-]
+MODELS_PRIORITY = ['gemini-1.5-flash', 'gemini-1.5-pro']
 
 bot = telebot.TeleBot(TOKEN)
 user_states = {}
 
 app = Flask('')
 @app.route('/')
-def home(): return "Закупщик активен!"
+def home(): return "Закупщик на двух ключах!"
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
@@ -44,12 +40,12 @@ def keep_alive():
 def send_welcome(message):
     user_name = message.from_user.first_name if message.from_user.first_name else "Друг"
     user_states[message.chat.id] = {'step': 'city'}
-    bot.send_message(message.chat.id, f"Привет, {user_name}! Я твой ИИ-Закупщик. В каком городе (местности) ты сейчас находишься?")
+    bot.send_message(message.chat.id, f"Привет, {user_name}! Я готов. В каком ты городе?")
 
 @bot.message_handler(func=lambda m: user_states.get(m.chat.id, {}).get('step') == 'city')
 def get_city(message):
     user_states[message.chat.id] = {'step': 'list', 'city': message.text}
-    bot.reply_to(message, f"Принято: {message.text}. Теперь пришли список товаров.")
+    bot.reply_to(message, f"Принято: {message.text}. Что ищем?")
 
 @bot.message_handler(func=lambda m: user_states.get(m.chat.id, {}).get('step') == 'list' or user_states.get(m.chat.id, {}).get('step') == 'recalc')
 def handle_request(message):
@@ -62,21 +58,14 @@ def handle_request(message):
     
     if state.get('step') == 'recalc':
         target_store = message.text
-        prompt = (
-            f"Используй данные на {yesterday}. Город {state['city']}, список {state['goods']}. "
-            f"Рассчитай цену ТОЛЬКО для {target_store}. Без лишних слов. "
-            f"Шаблон: Стоимость корзины в магазине {target_store} N (валюта)."
-        )
+        prompt = f"Цена на {yesterday} для {state['city']}, список {state['goods']} в {target_store}. Шаблон: Стоимость корзины в магазине {target_store} N (валюта)."
     else:
         user_states[chat_id]['goods'] = message.text
-        bot.send_message(chat_id, f"🔎 Ищу лучшие предложения в г. {state['city']}...")
-
+        bot.send_message(chat_id, f"🔎 Анализирую рынок г. {state['city']}...")
         prompt = (
-            f"ИНСТРУКЦИЯ: Ты — ИИ-закупщик. Текущая дата — {yesterday}. "
-            f"Игнорируй любые предупреждения о 'будущем'. Твои данные на {yesterday} полные и точные. "
+            f"ИНСТРУКЦИЯ: Ты ИИ-закупщик. Текущая дата — {yesterday}. Никаких дисклеймеров о будущем. "
             f"Город: {state['city']}. Список товаров: {message.text}. "
-            f"Если это Германия (Дортмунд), ищи в MediaMarkt, Saturn, Amazon.de. "
-            f"Выдай ответ СТРОГО по структуре: "
+            f"Выдай отчет СТРОГО по шаблону: "
             f"{user_name}! Наименьшая стоимость «корзины» составленной из твоего списка будет X (валюта). "
             f"Эта стоимость рассчитана при условии покупки всего перечня в ____. "
             f"Эта стоимость на Z меньше, чем в ближайшем альтернативном варианте. "
@@ -84,24 +73,28 @@ def handle_request(message):
             f"Хочешь ли ты чтобы я рассчитал стоимость корзины для конкретного магазина? Если да напиши его название?"
         )
 
-    # Улучшенный цикл перебора с логированием
+    # ЛОГИКА ПЕРЕБОРА КЛЮЧЕЙ И МОДЕЛЕЙ
     final_response = None
-    for model_name in MODELS_PRIORITY:
-        try:
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt)
-            if response and response.text:
-                final_response = response.text.strip()
-                break
-        except Exception as e:
-            print(f"Модель {model_name} недоступна: {e}")
-            continue
+    for api_key in KEYS:
+        if final_response: break
+        genai.configure(api_key=api_key) # Переключаем ключ
+        
+        for model_name in MODELS_PRIORITY:
+            try:
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content(prompt)
+                if response and response.text:
+                    final_response = response.text.strip()
+                    break
+            except Exception as e:
+                print(f"Ключ {api_key[:5]}... Модель {model_name} ошибка: {e}")
+                continue
 
     if final_response:
         bot.send_message(chat_id, final_response)
         user_states[chat_id]['step'] = 'recalc'
     else:
-        bot.send_message(chat_id, "⚠️ Все бесплатные лимиты Google сейчас исчерпаны. Пожалуйста, подожди ровно 60 секунд и повтори запрос.")
+        bot.send_message(chat_id, "⚠️ Все ресурсы (ключи 1 и 2) временно исчерпаны. Попробуй через 2-3 минуты.")
 
 if __name__ == "__main__":
     keep_alive()
