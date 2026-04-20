@@ -6,7 +6,7 @@ from threading import Thread
 from datetime import datetime, timedelta
 
 # ==========================================
-# 1. НАСТРОЙКИ
+# 1. НАСТРОЙКИ (ДВА КЛЮЧА)
 # ==========================================
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 KEYS = [os.getenv("GEMINI_API_KEY"), os.getenv("GEMINI_API_KEY_2")]
@@ -17,7 +17,7 @@ user_states = {}
 
 app = Flask('')
 @app.route('/')
-def home(): return "Закупщик: Контроль качества"
+def home(): return "Закупщик: Аналитик (Путь 2) активен"
 
 def run_web_server():
     port = int(os.environ.get("PORT", 8080))
@@ -28,14 +28,14 @@ def keep_alive():
     t.start()
 
 # ==========================================
-# 3. ЛОГИКА
+# 3. ЛОГИКА БОТА (ИНТЕЛЛЕКТУАЛЬНЫЙ ПОДБОР)
 # ==========================================
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user_name = message.from_user.first_name if message.from_user.first_name else "Друг"
     user_states[message.chat.id] = {'step': 'city'}
-    bot.send_message(message.chat.id, f"Привет, {user_name}! В каком ты городе?")
+    bot.send_message(message.chat.id, f"Привет, {user_name}! Я твой ИИ-Закупщик. В каком городе (местности) ты сейчас находишься?")
 
 @bot.message_handler(func=lambda m: user_states.get(m.chat.id, {}).get('step') == 'city')
 def get_city(message):
@@ -49,27 +49,30 @@ def handle_request(message):
     if not state: return
 
     user_name = message.from_user.first_name if message.from_user.first_name else "Друг"
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%d.%m.%Y")
     
-    # РЕЖИМ ПЕРЕРАСЧЕТА (С ВЕРИФИКАЦИЕЙ МОДЕЛИ)
+    # Режим ПЕРЕРАСЧЕТА (ИНТЕЛЛЕКТУАЛЬНЫЙ АНАЛИЗ)
     if state.get('step') == 'recalc':
         target_store = message.text
-        bot.send_message(chat_id, f"🔄 Проверяю наличие и цену {state['goods']} в {target_store}...")
+        bot.send_message(chat_id, f"🔄 Анализирую ассортимент {target_store} по параметрам...")
         prompt = (
-            f"ИНСТРУКЦИЯ: Найди цену ТОЛЬКО на модель {state['goods']} в {target_store} (г. {state['city']}). "
-            f"ВНИМАНИЕ: Сначала проверь, является ли найденная цена реальной именно для ЭТОЙ модели. "
-            f"Если ты видишь цену 799 € для модели, которая стоит 1200 €+, это ошибка — не пиши её! "
-            f"Если в {target_store} нет именно {state['goods']}, напиши: 'В {target_store} этой модели нет, но есть [Название] за [Цена]'. "
-            f"Если модель ЕСТЬ, ответь СТРОГО: Стоимость корзины в магазине {target_store} N (валюта)."
+            f"Найди {state['goods']} в {target_store} (г. {state['city']}). "
+            f"ИНСТРУКЦИЯ: Если название не совпадает на 100%, но технические характеристики (бренд, диагональ, тип экрана, год) идентичны, "
+            f"выдай цену и ОБЯЗАТЕЛЬНО добавь в начале: 'Это похоже на ваш запрос на 95%'. "
+            f"КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать дисклеймеры про будущие даты. "
+            f"Ответь строго по шаблону: "
+            f"[Твое предупреждение, если нужно]. Стоимость корзины в магазине {target_store} N (валюта)."
         )
     # ОСНОВНОЙ ПОИСК
     else:
         user_states[chat_id]['goods'] = message.text
-        bot.send_message(chat_id, f"🔎 Глубокий поиск для г. {state['city']}...")
+        bot.send_message(chat_id, f"🔎 Глубокий поиск «Аналитик» для г. {state['city']}...")
         prompt = (
-            f"ИНСТРУКЦИЯ: Найди лучшую цену на {message.text} в г. {state['city']}. "
-            f"Сравни MediaMarkt, Saturn, Amazon, Otto. "
-            f"ВАЖНО: Проверь соответствие букв и цифр в названии модели. Не путай Bravia 8 (XR80) с Bravia 3 или 7. "
-            f"Выдай отчет СТРОГО по шаблону: "
+            f"Ты — профессиональный аналитик. Твоя задача: найти лучшую цену на {message.text}. "
+            f"Если в разных магазинах (Amazon, MediaMarkt, Otto и т.д.) товар называется по-разному, "
+            f"используй интеллектуальный подбор по параметрам. "
+            f"Если уверен в совпадении параметров, но не в буквах названия, пиши: 'Это похоже на ваш запрос на 95%'. "
+            f"Выдай отчет СТРОГО по структуре: "
             f"{user_name}! Наименьшая стоимость «корзины» будет X (валюта) в (магазин). "
             f"Это на Z меньше, чем в ближайшем альтернативном варианте. "
             f"Скидки: (коротко). "
@@ -95,7 +98,7 @@ def handle_request(message):
         bot.send_message(chat_id, final_response)
         user_states[chat_id]['step'] = 'recalc'
     else:
-        bot.send_message(chat_id, "❌ Ошибка. Повтори запрос.")
+        bot.send_message(chat_id, "❌ Все ресурсы сейчас заняты. Повторите запрос позже.")
 
 if __name__ == "__main__":
     keep_alive()
